@@ -79,5 +79,34 @@ npm run dev
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
 
+## 湖仓审计：孤儿文件巡检闭环
+
+湖仓审计在通用模块之外提供一条 Parquet 数据路径核查专用链路
+（`backend/app/services/orphan_review.py` + `routers/orphan_review.py`，
+前端页面 `/data_lake_audit/orphan-review`），覆盖：
+
+1. **扫描批次与核查单**：登记扫描批次及扫描凭据（manifest、SHA256 校验和、
+   基线快照），核查单逐行列明「扫描批次、文件全路径、判作孤儿的依据」，
+   `GET /api/orphan-review/checklist/export` 导出 CSV。
+2. **分批逐行回执**：回执可分几次回传（JSON `POST /receipts/import` 或
+   CSV `POST /receipts/import-csv`），按原批次与路径归档；坏行逐行拒收、
+   重复回传按修订版本覆盖。没收到回执的项目继续列在 `GET /pending` 待核清单。
+3. **快照引用约束**：`POST /snapshot-references` 登记当前快照引用。回执确认
+   孤儿的路径若被当前快照引用，仍被拦截在清理范围外（快照约束优先于反馈约束）。
+4. **清理计划**：`POST /cleanup-plans` 从孤儿回执提取拟清理路径，可执行范围
+   同时受当前快照引用与回执反馈约束；计划原样保留扫描凭据，路径可回溯到批次。
+5. **审计留痕**：全部动作写入 `GET /audit-trail`，`GET /audit-narrative`
+   生成审计说明，交代新快照引用如何改变原孤儿意见及本轮处置（拦截项转下一轮
+   巡检待核清单）。
+
+`POST /api/orphan-review/demo/init` 可一键构造标准演示场景：同一张核查单两个
+Parquet 文件，其中一个在回执回传前被新快照引用。后端验证脚本：
+
+```bash
+cd backend
+.venv/bin/python -m tests.test_orphan_review        # 领域逻辑（53 项断言）
+.venv/bin/python -m tests.test_orphan_review_http   # HTTP 端到端（需先启动后端）
+```
+
 领域：数据工程
 子方向：数仓与数据湖
